@@ -5,7 +5,7 @@ from bson.objectid import ObjectId
 import datetime
 import os
 
-app = Flask(__name__, static_url_path='', static_folder='../frontend')
+app = Flask(__name__)
 CORS(app)
 
 # MongoDB Connection
@@ -23,16 +23,6 @@ def serialize_doc(doc):
     doc['id'] = str(doc['_id'])
     del doc['_id']
     return doc
-
-# Serve index.html
-@app.route('/')
-def serve_index():
-    return send_from_directory(app.static_folder, 'index.html')
-
-# Serve other files
-@app.route('/<path:path>')
-def serve_file(path):
-    return send_from_directory(app.static_folder, path)
 
 # ================= EQUIPMENT API =================
 
