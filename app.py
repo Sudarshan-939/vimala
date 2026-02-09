@@ -24,6 +24,34 @@ def serialize_doc(doc):
     del doc['_id']
     return doc
 
+from functools import wraps
+
+# ... (existing imports)
+
+# Admin Authentication Decorator
+def require_admin(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({'success': False, 'error': 'No token provided'}), 401
+        
+        try:
+            token = auth_header.split(" ")[1]
+            # Mock token format: prefix-userid
+            user_id = token.split("-")[-1]
+            
+            user = db.users.find_one({'_id': ObjectId(user_id)})
+            
+            if not user or user.get('role') != 'admin':
+                return jsonify({'success': False, 'error': 'Admin privileges required'}), 403
+                
+        except Exception:
+            return jsonify({'success': False, 'error': 'Invalid token'}), 401
+            
+        return f(*args, **kwargs)
+    return decorated_function
+
 # ================= EQUIPMENT API =================
 
 @app.route('/api/equipment', methods=['GET'])
@@ -35,6 +63,7 @@ def get_equipment():
     })
 
 @app.route('/api/equipment', methods=['POST'])
+@require_admin
 def add_equipment():
     data = request.json
     
@@ -59,6 +88,7 @@ def add_equipment():
     })
 
 @app.route('/api/equipment/<string:id>', methods=['DELETE'])
+@require_admin
 def delete_equipment(id):
     try:
         db.equipment.delete_one({'_id': ObjectId(id)})
@@ -113,6 +143,7 @@ def create_booking():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/bookings/<string:booking_id>', methods=['PUT'])
+@require_admin
 def update_booking_status(booking_id):
     data = request.json
     result = db.bookings.update_one(
@@ -136,6 +167,7 @@ def get_gallery():
     })
 
 @app.route('/api/gallery', methods=['POST'])
+@require_admin
 def update_gallery():
     data = request.json
     
@@ -160,6 +192,7 @@ def get_contact():
     })
 
 @app.route('/api/contact', methods=['POST'])
+@require_admin
 def update_contact():
     data = request.json
     
@@ -197,6 +230,32 @@ def login():
         })
     else:
         return jsonify({'success': False, 'error': 'Invalid credentials'}), 401
+
+@app.route('/api/auth/admin-login', methods=['POST'])
+def admin_login():
+    data = request.json
+    username = data.get('username')
+    password = data['password']
+    
+    # Check if user exists and has admin role
+    # Note: Using 'email' field for username based on setup_mongo.py
+    user = db.users.find_one({
+        '$or': [{'email': username}, {'name': username}], 
+        'password': password,
+        'role': 'admin'
+    })
+    
+    if user:
+        return jsonify({
+            'success': True,
+            'message': 'Admin login successful',
+            'data': {
+                'token': 'mock-admin-token-' + str(user['_id']),
+                'user': serialize_doc(user)
+            }
+        })
+    else:
+        return jsonify({'success': False, 'error': 'Invalid admin credentials'}), 401
 
 @app.route('/api/auth/register', methods=['POST'])
 def register():
