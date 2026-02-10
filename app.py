@@ -6,6 +6,8 @@ from bson.objectid import ObjectId
 import datetime
 import os
 
+import certifi
+
 app = Flask(__name__)
 CORS(app)
 Compress(app)  # Enable gzip compression for faster data transfer
@@ -13,6 +15,7 @@ Compress(app)  # Enable gzip compression for faster data transfer
 # MongoDB Connection with optimization
 client = MongoClient(
     'mongodb+srv://ys7709995_db_user:M4mnir5IzF1AjMJv@vimala.9c8xz3l.mongodb.net/?appName=Vimala',
+    tlsCAFile=certifi.where(),  # Explicitly use certifi CA bundle
     maxPoolSize=50,  # Increase connection pool
     minPoolSize=10,
     maxIdleTimeMS=45000,
