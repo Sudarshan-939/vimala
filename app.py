@@ -313,6 +313,26 @@ def register():
     db.users.insert_one(new_user)
     return jsonify({'success': True, 'message': 'Registration successful'})
 
+# ================= ROOT ROUTE =================
+
+@app.route('/', methods=['GET', 'HEAD'])
+def health_check():
+    """Health check endpoint for Render"""
+    try:
+        # Test database connection
+        db.command('ping')
+        return jsonify({
+            'success': True,
+            'message': 'Vimala Cine Rental API is running',
+            'database': 'connected'
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': 'API is running but database connection failed',
+            'error': str(e)
+        }), 500
+
 if __name__ == '__main__':
     print("Starting Flask server with MongoDB...")
     app.run(debug=True, port=5000)
