@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_compress import Compress
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson.objectid import ObjectId
 import datetime
@@ -7,6 +8,7 @@ import os
 
 app = Flask(__name__)
 CORS(app)
+Compress(app)  # Enable gzip compression for faster data transfer
 
 # MongoDB Connection with optimization
 client = MongoClient(

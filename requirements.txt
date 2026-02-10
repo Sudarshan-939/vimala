@@ -1,5 +1,7 @@
 flask
 flask-cors
+flask-compress
 pymongo
 dnspython
 gunicorn
+
