@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson.objectid import ObjectId
 import datetime
 import os
@@ -8,10 +8,38 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# MongoDB Connection
-# client = MongoClient('mongodb://localhost:27017/')
-client = MongoClient('mongodb+srv://ys7709995_db_user:M4mnir5IzF1AjMJv@vimala.9c8xz3l.mongodb.net/?appName=Vimala')
+# MongoDB Connection with optimization
+client = MongoClient(
+    'mongodb+srv://ys7709995_db_user:M4mnir5IzF1AjMJv@vimala.9c8xz3l.mongodb.net/?appName=Vimala',
+    maxPoolSize=50,  # Increase connection pool
+    minPoolSize=10,
+    maxIdleTimeMS=45000,
+    serverSelectionTimeoutMS=5000  # Faster timeout
+)
 db = client['cine_rental']
+
+# Create indexes for faster queries
+def create_indexes():
+    try:
+        # Index for users collection
+        db.users.create_index([('email', ASCENDING)], unique=True)
+        db.users.create_index([('role', ASCENDING)])
+        
+        # Index for equipment collection
+        db.equipment.create_index([('type', ASCENDING)])
+        db.equipment.create_index([('name', ASCENDING)])
+        
+        # Index for bookings collection
+        db.bookings.create_index([('bookingId', ASCENDING)], unique=True)
+        db.bookings.create_index([('status', ASCENDING)])
+        db.bookings.create_index([('createdAt', DESCENDING)])
+        
+        print("Database indexes created successfully")
+    except Exception as e:
+        print(f"Index creation note: {e}")
+
+# Create indexes on startup
+create_indexes()
 
 # Helper to convert MongoDB documents to JSON serializable format
 def serialize_doc(doc):
@@ -56,7 +84,12 @@ def require_admin(f):
 
 @app.route('/api/equipment', methods=['GET'])
 def get_equipment():
-    equipment = list(db.equipment.find())
+    # Optimize query - only fetch necessary fields, use projection
+    equipment = list(db.equipment.find(
+        {},
+        {'_id': 1, 'name': 1, 'type': 1, 'price': 1, 'image': 1, 'description': 1, 'stock': 1}
+    ).limit(100))  # Limit results for faster loading
+    
     return jsonify({
         'success': True,
         'data': serialize_doc(equipment)
@@ -100,7 +133,8 @@ def delete_equipment(id):
 
 @app.route('/api/bookings', methods=['GET'])
 def get_bookings():
-    bookings = list(db.bookings.find())
+    # Optimize query - sort by most recent first, limit results
+    bookings = list(db.bookings.find().sort('createdAt', -1).limit(100))
     return jsonify({
         'success': True,
         'data': serialize_doc(bookings)
