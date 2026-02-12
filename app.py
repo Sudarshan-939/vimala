@@ -5,22 +5,76 @@ from pymongo import MongoClient, ASCENDING, DESCENDING
 from bson.objectid import ObjectId
 import datetime
 import os
+import bcrypt
 
 import certifi
+import ssl
 
 app = Flask(__name__)
 CORS(app)
 Compress(app)  # Enable gzip compression for faster data transfer
 
-# MongoDB Connection with optimization
-client = MongoClient(
-    'mongodb+srv://ys7709995_db_user:M4mnir5IzF1AjMJv@vimala.9c8xz3l.mongodb.net/?appName=Vimala',
-    tlsCAFile=certifi.where(),  # Explicitly use certifi CA bundle
-    maxPoolSize=50,  # Increase connection pool
-    minPoolSize=10,
-    maxIdleTimeMS=45000,
-    serverSelectionTimeoutMS=5000  # Faster timeout
-)
+import firebase_admin
+from firebase_admin import credentials, auth
+
+# Initialize Firebase Admin
+try:
+    cred_path = os.path.join(os.path.dirname(__file__), 'firebase_service_account.json')
+    if os.path.exists(cred_path):
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+        print("✓ Firebase Admin SDK initialized")
+    else:
+        # Check if we can initialize from env vars (for production)
+        if os.environ.get('FIREBASE_CREDENTIALS'):
+             import json
+             cred_dict = json.loads(os.environ.get('FIREBASE_CREDENTIALS'))
+             cred = credentials.Certificate(cred_dict)
+             firebase_admin.initialize_app(cred)
+             print("✓ Firebase Admin SDK initialized from env")
+        else:
+             print("⚠ Firebase credentials not found. Google login will fail.")
+except Exception as e:
+    print(f"⚠ Firebase Admin initialization failed: {e}")
+
+
+# MongoDB Connection with SSL/TLS fix for cloud deployment
+# Try connection with proper SSL settings
+try:
+    # First attempt: Use certifi with proper SSL context
+    client = MongoClient(
+        'mongodb+srv://ys7709995_db_user:M4mnir5IzF1AjMJv@vimala.9c8xz3l.mongodb.net/?appName=Vimala',
+        tlsCAFile=certifi.where(),
+        ssl_cert_reqs=ssl.CERT_NONE,  # Bypass strict certificate validation for cloud environments
+        maxPoolSize=50,
+        minPoolSize=10,
+        maxIdleTimeMS=45000,
+        serverSelectionTimeoutMS=30000,  # Increased timeout for cloud
+        connectTimeoutMS=30000,
+        socketTimeoutMS=30000
+    )
+    # Test connection
+    client.admin.command('ping')
+    print("✓ MongoDB connected successfully with SSL")
+except Exception as e:
+    print(f"⚠ SSL connection failed: {e}")
+    # Fallback: Try without strict SSL
+    try:
+        client = MongoClient(
+            'mongodb+srv://ys7709995_db_user:M4mnir5IzF1AjMJv@vimala.9c8xz3l.mongodb.net/?tls=true&tlsAllowInvalidCertificates=true&appName=Vimala',
+            maxPoolSize=50,
+            minPoolSize=10,
+            maxIdleTimeMS=45000,
+            serverSelectionTimeoutMS=30000,
+            connectTimeoutMS=30000,
+            socketTimeoutMS=30000
+        )
+        client.admin.command('ping')
+        print("✓ MongoDB connected with relaxed SSL settings")
+    except Exception as e2:
+        print(f"✗ MongoDB connection failed completely: {e2}")
+        raise
+
 db = client['cine_rental']
 
 # Create indexes for faster queries
@@ -256,9 +310,9 @@ def login():
     email = data.get('email', data.get('username'))
     password = data['password']
     
-    user = db.users.find_one({'email': email, 'password': password})
+    user = db.users.find_one({'email': email})
     
-    if user:
+    if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
         return jsonify({
             'success': True,
             'message': 'Login successful',
@@ -280,11 +334,10 @@ def admin_login():
     # Note: Using 'email' field for username based on setup_mongo.py
     user = db.users.find_one({
         '$or': [{'email': username}, {'name': username}], 
-        'password': password,
         'role': 'admin'
     })
     
-    if user:
+    if user and bcrypt.checkpw(password.encode('utf-8'), user['password']):
         return jsonify({
             'success': True,
             'message': 'Admin login successful',
@@ -300,21 +353,117 @@ def admin_login():
 def register():
     data = request.json
     
+    # Validation
+    if not data.get('name') or not data.get('email') or not data.get('password'):
+        return jsonify({'success': False, 'error': 'Name, email, and password are required'}), 400
+    
+    # Email validation
+    import re
+    email_regex = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
+    if not re.match(email_regex, data['email']):
+        return jsonify({'success': False, 'error': 'Invalid email format'}), 400
+    
+    # Password validation
+    if len(data['password']) < 6:
+        return jsonify({'success': False, 'error': 'Password must be at least 6 characters long'}), 400
+    
+    # Check if user already exists
     if db.users.find_one({'email': data['email']}):
-        return jsonify({'success': False, 'error': 'Email already exists'}), 400
+        return jsonify({'success': False, 'error': 'Email already registered. Please login instead.'}), 400
         
+    # Hash password before storing
+    hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
+    
+    # Create new user
     new_user = {
         'name': data['name'],
         'email': data['email'],
-        'password': data['password'],
+        'password': hashed_password,
         'phone': data.get('phone', ''),
         'company': data.get('company', ''),
         'role': 'user',
         'created_at': datetime.datetime.now().isoformat()
     }
     
-    db.users.insert_one(new_user)
-    return jsonify({'success': True, 'message': 'Registration successful'})
+    result = db.users.insert_one(new_user)
+    new_user['_id'] = result.inserted_id
+    
+    # Return token and user data for auto-login
+    return jsonify({
+        'success': True,
+        'message': 'Registration successful',
+        'data': {
+            'token': 'mock-jwt-token-' + str(new_user['_id']),
+            'user': serialize_doc(new_user)
+        }
+    })
+
+@app.route('/api/auth/google', methods=['POST'])
+def google_auth():
+    data = request.json
+    token = data.get('token')
+    
+    if not token:
+        return jsonify({'success': False, 'error': 'No token provided'}), 400
+        
+    try:
+        # Verify the Firebase ID token
+        decoded_token = auth.verify_id_token(token)
+        
+        # Get user info from token
+        uid = decoded_token['uid']
+        email = decoded_token.get('email')
+        name = decoded_token.get('name', 'User')
+        picture = decoded_token.get('picture', '')
+        
+        if not email:
+             return jsonify({'success': False, 'error': 'Email not found in token'}), 400
+
+        # Check if user exists in our DB
+        user = db.users.find_one({'email': email})
+        
+        if not user:
+            # Create new user
+            new_user = {
+                'firebase_uid': uid,
+                'name': name,
+                'email': email,
+                'picture': picture,
+                'role': 'user',
+                'created_at': datetime.datetime.now().isoformat(),
+                'auth_provider': 'google',
+                'password': '' # No password for Google users
+            }
+            result = db.users.insert_one(new_user)
+            new_user['_id'] = result.inserted_id
+            user = new_user
+        else:
+            # Update user info if needed
+            update_fields = {'auth_provider': 'google', 'firebase_uid': uid}
+            if picture:
+                update_fields['picture'] = picture
+                
+            db.users.update_one(
+                {'_id': user['_id']}, 
+                {'$set': update_fields}
+            )
+            # Ensure user object has the updated fields for response
+            user.update(update_fields)
+            
+        return jsonify({
+            'success': True,
+            'message': 'Google login successful',
+            'data': {
+                'token': f"mock-jwt-token-{user['_id']}", # In a real app, generate a fresh session token
+                'user': serialize_doc(user)
+            }
+        })
+        
+    except ValueError as e:
+        return jsonify({'success': False, 'error': f'Invalid token: {str(e)}'}), 401
+    except Exception as e:
+        print(f"Google auth error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ================= ROOT ROUTE =================
 

@@ -1,5 +1,6 @@
 from pymongo import MongoClient
 import datetime
+import bcrypt
 
 # Connect to MongoDB
 # client = MongoClient('mongodb://localhost:27017/')
@@ -12,14 +13,17 @@ def seed_database():
     # 1. Users
     users_collection = db['users']
     if users_collection.count_documents({'email': 'vimala'}) == 0:
+        # Hash the admin password
+        hashed_password = bcrypt.hashpw('vimala'.encode('utf-8'), bcrypt.gensalt())
+        
         users_collection.insert_one({
             'email': 'vimala',
-            'password': 'vimala',
+            'password': hashed_password,
             'name': 'Vimala Admin',
             'role': 'admin',
             'created_at': datetime.datetime.now().isoformat()
         })
-        print("Admin user created.")
+        print("Admin user created with hashed password.")
     else:
         print("Admin user already exists.")
 
